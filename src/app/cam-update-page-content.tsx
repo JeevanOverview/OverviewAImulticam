@@ -1,348 +1,259 @@
+// CamUpdatePageContent.tsx – full revised implementation for new /update API
+// -----------------------------------------------------------------------------
+// This replaces the legacy prepare-update flow with the camera’s newer firmware
+// interface: upload → start → poll. It keeps the same UI layout but removes the
+// redundant “prepare” step and provides real upload progress.
 
 'use client';
 
-import { useState, useEffect, type ChangeEvent, type FormEvent } from 'react';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
+import {
+  Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle,
+} from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { Network, UploadCloud, FileCog, CheckCircle2, XCircle, Loader2, ArrowRight, RefreshCw, Settings2 } from 'lucide-react';
+import {
+  Network, UploadCloud, FileCog, CheckCircle2, XCircle, Loader2, ArrowRight, RefreshCw,
+} from 'lucide-react';
+
+// -----------------------------------------------------------------------------
+// Helpers / endpoints ----------------------------------------------------------
+// -----------------------------------------------------------------------------
+const CAM_ORIGIN    = (ip: string) => `http://${ip}`;
+const STATUS_URL    = (ip: string) => `${CAM_ORIGIN(ip)}/update/status`;
+const UPLOAD_URL    = (ip: string) => `${CAM_ORIGIN(ip)}/update`;
+const START_INSTALL = (ip: string) => `${CAM_ORIGIN(ip)}/update/start`;
 
 type Step =
   | 'ip_input'
-  | 'connecting_to_camera'
-  | 'ready_to_prepare'
-  | 'preparing_update'
+  | 'connecting'
   | 'ready_to_upload'
   | 'uploading'
+  | 'installing'
   | 'update_complete'
   | 'update_failed';
 
-// Define API endpoints - these are placeholders and should be configured for the actual camera
-const API_BASE_URL = (ip: string) => `http://${ip}/api/v1`; // Ensure your camera uses HTTP or change to HTTPS
-const STATUS_ENDPOINT = (ip: string) => `${API_BASE_URL(ip)}/device/status`;
-const PREPARE_UPDATE_ENDPOINT = (ip: string) => `${API_BASE_URL(ip)}/system/prepare_update`;
-const UPLOAD_FIRMWARE_ENDPOINT = (ip: string) => `${API_BASE_URL(ip)}/system/upload_firmware`;
+interface StatusResp { status: 'started' | 'finished' | 'reboot_required' | 'error' }
 
-
+// -----------------------------------------------------------------------------
 export default function CamUpdatePageContent() {
-  const [ipAddress, setIpAddress] = useState<string>('');
-  const [currentStep, setCurrentStep] = useState<Step>('ip_input');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
-  const [statusMessage, setStatusMessage] = useState<string>('');
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-
+  const [ip,       setIp]       = useState('');
+  const [step,     setStep]     = useState<Step>('ip_input');
+  const [file,     setFile]     = useState<File | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [statusMsg, setStatusMsg] = useState('');
   const { toast } = useToast();
 
-  const resetState = () => {
-    setIpAddress('');
-    setCurrentStep('ip_input');
-    setSelectedFile(null);
-    setUploadProgress(0);
-    setStatusMessage('');
-    setIsLoading(false);
+  // ---------------------------------------------------------------------------
+  const reset = () => {
+    setIp('');
+    setStep('ip_input');
+    setFile(null);
+    setProgress(0);
+    setStatusMsg('');
   };
 
+  // ---------------------------------------------------------------------------
+  // 1️⃣ Connect ----------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   const handleIpSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!ipAddress.match(/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/)) {
-      setStatusMessage('Invalid IP address format.');
-      toast({ title: 'Error', description: 'Invalid IP address format.', variant: 'destructive' });
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+      toast({ variant: 'destructive', title: 'Invalid IP', description: 'Enter a valid IPv4 address.' });
       return;
     }
-    setStatusMessage('');
-    setIsLoading(true);
-    setCurrentStep('connecting_to_camera');
-    toast({ title: 'Connecting...', description: `Attempting to connect to ${ipAddress}` });
 
-    const targetUrl = STATUS_ENDPOINT(ipAddress);
+    setStep('connecting');
+    toast({ title: 'Connecting', description: `Pinging ${ip}…` });
 
     try {
-      const response = await fetch(targetUrl, {
-        method: 'GET',
-        // Add any necessary headers, e.g., for authentication if required by the camera
-        // headers: { 'Authorization': 'Bearer YOUR_TOKEN_HERE' },
-      });
-
-      if (response.ok) {
-        setCurrentStep('ready_to_prepare');
-        toast({ title: 'Connected!', description: `Successfully connected to camera at ${ipAddress}.` });
+      const res = await fetch(STATUS_URL(ip), { method: 'GET', mode: 'cors' });
+      if (res.ok || res.status === 404) {
+        toast({ title: 'Connected', description: `Camera at ${ip} is reachable.` });
+        setStep('ready_to_upload');
       } else {
-        setStatusMessage(`Failed to connect. Camera responded with Status: ${response.status}. Ensure camera is reachable and API endpoint is correct.`);
-        toast({ title: 'Connection Failed', description: `Could not connect to camera at ${ipAddress}. Status: ${response.status}`, variant: 'destructive' });
-        setCurrentStep('ip_input');
+        throw new Error(`HTTP ${res.status}`);
       }
-    } catch (error) {
-      console.error(`Connection attempt failed to URL: ${targetUrl}`);
-      let userFriendlyMessage = 'Failed to connect to the camera. This could be due to the camera being offline, an incorrect IP address, network issues, or CORS restrictions on the camera. Please check your browser\'s developer console for more specific error messages (especially regarding CORS).';
-      
-      if (error instanceof Error) {
-        console.error(`Error name: ${error.name}`);
-        console.error(`Error message: ${error.message}`);
-        if (error.stack) {
-            console.error(`Stack trace: ${error.stack}`);
-        }
-      } else {
-        console.error('Caught a non-Error object during connection attempt:', error);
-      }
-      console.error("Full error object:", error);
-
-      setStatusMessage(userFriendlyMessage);
-      toast({ title: 'Connection Error', description: userFriendlyMessage, variant: 'destructive' });
-      setCurrentStep('ip_input');
-    } finally {
-      setIsLoading(false);
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Connection failed', description: String(err) });
+      setStep('ip_input');
     }
   };
 
-  const handlePrepareUpdate = async () => {
-    setIsLoading(true);
-    setCurrentStep('preparing_update');
-    toast({ title: 'Preparing Update...', description: 'Sending command to camera to prepare for update...' });
-    const targetUrl = PREPARE_UPDATE_ENDPOINT(ipAddress);
+  // ---------------------------------------------------------------------------
+  // 2️⃣ Upload firmware (XHR for progress) --------------------------------------
+  // ---------------------------------------------------------------------------
+  const startUpload = () => {
+    if (!file) return;
 
-    try {
-      const response = await fetch(targetUrl, {
-        method: 'POST', 
-      });
+    setStep('uploading');
+    toast({ title: 'Uploading', description: `${file.name} → ${ip}` });
 
-      if (response.ok) {
-        setCurrentStep('ready_to_upload');
-        toast({ title: 'Ready for Firmware', description: 'Camera is ready to receive the firmware file.' });
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', UPLOAD_URL(ip));
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setProgress(Math.round(100 * e.loaded / e.total));
+    };
+
+    xhr.onload = async () => {
+      if (xhr.status === 200) {
+        setProgress(100);
+        toast({ title: 'Upload complete', description: 'Starting installation…' });
+        await startInstall();
       } else {
-        const errorText = await response.text();
-        setStatusMessage(`Failed to prepare camera. Status: ${response.status}. Server said: ${errorText}`);
-        toast({ title: 'Preparation Failed', description: `Camera at ${ipAddress} did not prepare for update. Status: ${response.status}`, variant: 'destructive' });
-        setCurrentStep('ready_to_prepare');
+        fail(`Upload failed (HTTP ${xhr.status})`);
       }
-    } catch (error) {
-      console.error(`Prepare update error for URL: ${targetUrl}`);
-      let userFriendlyMessage = 'Error preparing camera for update. Check connection, API endpoint, or CORS settings. See browser console for details.';
-      if (error instanceof Error) {
-        console.error(`Error name: ${error.name}`);
-        console.error(`Error message: ${error.message}`);
-      }
-      console.error("Full error object:", error);
-      setStatusMessage(userFriendlyMessage);
-      toast({ title: 'Preparation Error', description: userFriendlyMessage, variant: 'destructive' });
-      setCurrentStep('ready_to_prepare');
-    } finally {
-      setIsLoading(false);
-    }
+    };
+
+    xhr.onerror = () => fail('Network error during upload');
+
+    const form = new FormData();
+    form.append('file', file);
+    xhr.send(form);
   };
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
-      setStatusMessage('');
-    }
-  };
-
-  const handleStartUpload = async () => {
-    if (!selectedFile) {
-      setStatusMessage('Please select a firmware file.');
-      toast({ title: 'Error', description: 'No file selected.', variant: 'destructive' });
-      return;
-    }
-    setStatusMessage('');
-    setIsLoading(true);
-    setCurrentStep('uploading');
-    setUploadProgress(0);
-
-    toast({ title: 'Uploading Firmware...', description: `Sending ${selectedFile.name} to ${ipAddress}.` });
-
-    const formData = new FormData();
-    formData.append('firmware', selectedFile); 
-    const targetUrl = UPLOAD_FIRMWARE_ENDPOINT(ipAddress);
-
+  // ---------------------------------------------------------------------------
+  // 3️⃣ Start install + poll status -------------------------------------------
+  // ---------------------------------------------------------------------------
+  const startInstall = async () => {
+    setStep('installing');
     try {
-      setUploadProgress(10); // Indicate start of process
-      const response = await fetch(targetUrl, {
+      await fetch(START_INSTALL(ip), {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file!.name }),
       });
-      setUploadProgress(50); 
 
-      if (response.ok) {
-        setUploadProgress(100);
-        setCurrentStep('update_complete');
-        setStatusMessage(`Firmware ${selectedFile.name} uploaded successfully to ${ipAddress}! Camera may restart.`);
-        toast({ title: 'Update Successful!', description: `Firmware ${selectedFile.name} sent to camera.` });
-      } else {
-        const errorText = await response.text();
-        setCurrentStep('update_failed');
-        setStatusMessage(`Failed to upload firmware to ${ipAddress}. Status: ${response.status}. Server said: ${errorText}`);
-        toast({ title: 'Update Failed', description: `Upload failed. Status: ${response.status}`, variant: 'destructive' });
-        setUploadProgress(0);
-      }
-    } catch (error) {
-      console.error(`Upload error for URL: ${targetUrl}`);
-      let userFriendlyMessage = 'Failed to upload firmware due to a network, camera error, or CORS issue. See browser console for details.';
-       if (error instanceof Error) {
-        console.error(`Error name: ${error.name}`);
-        console.error(`Error message: ${error.message}`);
-      }
-      console.error("Full error object:", error);
-      setCurrentStep('update_failed');
-      setStatusMessage(userFriendlyMessage);
-      toast({ title: 'Upload Error', description: userFriendlyMessage, variant: 'destructive' });
-      setUploadProgress(0);
-    } finally {
-      setIsLoading(false);
+      const poll = setInterval(async () => {
+        try {
+          const res   = await fetch(STATUS_URL(ip));
+          const data: StatusResp = await res.json();
+          setStatusMsg(data.status);
+          if (data.status === 'finished' || data.status === 'reboot_required') {
+            clearInterval(poll);
+            setStep('update_complete');
+          } else if (data.status === 'error') {
+            clearInterval(poll);
+            setStep('update_failed');
+          }
+        } catch { /* swallow, will retry */ }
+      }, 3000);
+
+    } catch (err) {
+      fail(`Install failed: ${err}`);
     }
   };
 
-  const renderStepContent = () => {
-    switch (currentStep) {
+  const fail = (msg: string) => {
+    toast({ variant: 'destructive', title: 'Error', description: msg });
+    setStep('update_failed');
+  };
+
+  // ---------------------------------------------------------------------------
+  // JSX helpers --------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  const footer = () => {
+    switch (step) {
       case 'ip_input':
         return (
-          <form onSubmit={handleIpSubmit} className="space-y-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Network /> Enter Camera IP Address</CardTitle>
-              <CardDescription>Enter the IP address of the camera you want to update.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ipAddress">IP Address</Label>
-                <Input
-                  id="ipAddress"
-                  type="text"
-                  placeholder="e.g., 192.168.1.100"
-                  value={ipAddress}
-                  onChange={(e) => setIpAddress(e.target.value)}
-                  required
-                  className="text-lg"
-                  disabled={isLoading}
-                />
-              </div>
-              {statusMessage && <Alert variant={currentStep === 'ip_input' && !isLoading ? 'destructive' : 'default'}><AlertDescription>{statusMessage}</AlertDescription></Alert>}
-            </CardContent>
-            <CardFooter>
-              <Button type="submit" className="w-full" disabled={isLoading || !ipAddress}>
-                {isLoading ? <Loader2 className="animate-spin" /> : <>Connect <ArrowRight className="ml-2 h-4 w-4" /></>}
-              </Button>
-            </CardFooter>
-          </form>
-        );
-      case 'connecting_to_camera':
-        return (
-          <CardContent className="flex flex-col items-center justify-center space-y-4 p-8 min-h-[200px]">
-            <Loader2 className="h-12 w-12 animate-spin text-accent" />
-            <p className="text-lg font-medium">Connecting to {ipAddress}...</p>
-            <p className="text-muted-foreground">Please wait while we establish a connection.</p>
-          </CardContent>
-        );
-      case 'ready_to_prepare':
-        return (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Settings2 /> Prepare Camera for Update</CardTitle>
-              <CardDescription>Connected to camera at <strong>{ipAddress}</strong>. Proceed to prepare the camera for firmware update.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
-                This will send a command to the camera to enter firmware update mode if required by its API.
-              </p>
-               {statusMessage && <Alert variant="destructive"><AlertDescription>{statusMessage}</AlertDescription></Alert>}
-            </CardContent>
-            <CardFooter className="flex-col space-y-2">
-              <Button onClick={handlePrepareUpdate} className="w-full" disabled={isLoading}>
-                {isLoading ? <Loader2 className="animate-spin" /> : <>Prepare Camera <ArrowRight className="ml-2 h-4 w-4" /></>}
-              </Button>
-              <Button onClick={resetState} variant="outline" className="w-full">
-                Cancel
-              </Button>
-            </CardFooter>
-          </>
-        );
-      case 'preparing_update':
-        return (
-           <CardContent className="flex flex-col items-center justify-center space-y-4 p-8 min-h-[200px]">
-            <Loader2 className="h-12 w-12 animate-spin text-accent" />
-            <p className="text-lg font-medium">Preparing Camera...</p>
-            <p className="text-muted-foreground">Sending command to camera's update interface.</p>
-          </CardContent>
+          <Button type="submit" disabled={!ip} className="w-full">
+            Connect <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
         );
       case 'ready_to_upload':
         return (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><UploadCloud /> Upload Firmware</CardTitle>
-              <CardDescription>Camera at <strong>{ipAddress}</strong> is ready. Select the firmware file.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="firmwareFile">Firmware File</Label>
-                <Input id="firmwareFile" type="file" onChange={handleFileChange} className="text-base" disabled={isLoading} />
-              </div>
-              {selectedFile && <p className="text-sm text-muted-foreground">Selected: {selectedFile.name}</p>}
-              {statusMessage && <Alert variant="destructive"><AlertDescription>{statusMessage}</AlertDescription></Alert>}
-            </CardContent>
-            <CardFooter className="flex-col space-y-2">
-              <Button onClick={handleStartUpload} className="w-full" disabled={isLoading || !selectedFile}>
-                {isLoading ? <Loader2 className="animate-spin" /> : <>Start Update <FileCog className="ml-2 h-4 w-4" /></>}
-              </Button>
-               <Button onClick={resetState} variant="outline" className="w-full">
-                Cancel
-              </Button>
-            </CardFooter>
-          </>
+          <Button disabled={!file} className="w-full" onClick={startUpload}>
+            Upload & Install <UploadCloud className="ml-2 h-4 w-4" />
+          </Button>
         );
       case 'uploading':
-        return (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><FileCog /> Uploading Firmware</CardTitle>
-              <CardDescription>Uploading {selectedFile?.name} to <strong>{ipAddress}</strong>. Please wait.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-center">
-              {isLoading && <Loader2 className="h-12 w-12 animate-spin text-accent mx-auto mb-4" />}
-              <Progress value={uploadProgress} className="w-full" />
-              <p className="text-sm text-muted-foreground">
-                {uploadProgress === 100 ? "Finalizing..." : (uploadProgress >= 10 ? "Transferring file..." : "Preparing to upload...")}
-              </p>
-              <p className="text-xs text-muted-foreground">Do not turn off or disconnect the camera.</p>
-            </CardContent>
-          </>
-        );
+      case 'installing':
+        return <Button disabled className="w-full"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Please wait…</Button>;
       case 'update_complete':
-      case 'update_failed':
-        const isSuccess = currentStep === 'update_complete';
-        return (
-          <>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                {isSuccess ? <CheckCircle2 className="text-green-500" /> : <XCircle className="text-red-500" />}
-                Update {isSuccess ? 'Process Complete' : 'Process Failed'}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Alert variant={isSuccess ? 'default' : 'destructive'} className={isSuccess ? "border-green-500" : ""}>
-                {isSuccess ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <XCircle className="h-4 w-4 text-red-500" />}
-                <AlertTitle>{isSuccess ? 'Success!' : 'Error!'}</AlertTitle>
-                <AlertDescription>{statusMessage}</AlertDescription>
-              </Alert>
-            </CardContent>
-            <CardFooter>
-              <Button onClick={resetState} className="w-full" variant="outline">
-                <RefreshCw className="mr-2 h-4 w-4" /> Start New Update Process
-              </Button>
-            </CardFooter>
-          </>
-        );
+        return <Button className="w-full" onClick={reset}><RefreshCw className="mr-2 h-4 w-4" /> New Update</Button>;
       default:
-        return <p>Unknown step.</p>;
+        return <Button variant="destructive" className="w-full" onClick={reset}>Reset</Button>;
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Render --------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   return (
     <Card className="w-full max-w-lg shadow-2xl">
-      {renderStepContent()}
+      {step === 'ip_input' && (
+        <form onSubmit={handleIpSubmit} className="space-y-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Network /> Enter Camera IP</CardTitle>
+            <CardDescription>Example: 192.168.0.101</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Label htmlFor="ip">IP Address</Label>
+            <Input id="ip" value={ip} onChange={(e) => setIp(e.target.value)} disabled={step !== 'ip_input'} />
+          </CardContent>
+          <CardFooter>{footer()}</CardFooter>
+        </form>
+      )}
+
+      {step === 'connecting' && (
+        <CardContent className="flex flex-col items-center p-8 space-y-4">
+          <Loader2 className="h-12 w-12 animate-spin" />
+          <p>Connecting to {ip}…</p>
+        </CardContent>
+      )}
+
+      {step === 'ready_to_upload' && (
+        <>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><UploadCloud /> Upload Firmware</CardTitle>
+            <CardDescription>Select a firmware file for {ip}.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input type="file" onChange={(e: ChangeEvent<HTMLInputElement>) => setFile(e.target.files?.[0] ?? null)} />
+            {file && <p className="text-sm text-muted-foreground">Selected: {file.name}</p>}
+          </CardContent>
+          <CardFooter>{footer()}</CardFooter>
+        </>
+      )}
+
+      {step === 'uploading' && (
+        <>
+          <CardHeader><CardTitle className="flex items-center gap-2"><FileCog /> Uploading…</CardTitle></CardHeader>
+          <CardContent className="space-y-4 text-center">
+            <Progress value={progress} />
+            <p>{progress}%</p>
+          </CardContent>
+        </>
+      )}
+
+      {step === 'installing' && (
+        <CardContent className="space-y-2 text-center">
+          <Loader2 className="h-12 w-12 animate-spin mx-auto" />
+          <p>Installing… Status: {statusMsg}</p>
+        </CardContent>
+      )}
+
+      {(step === 'update_complete' || step === 'update_failed') && (
+        <>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {step === 'update_complete' ? <CheckCircle2 className="text-green-500" /> : <XCircle className="text-red-500" />} {step === 'update_complete' ? 'Update complete' : 'Update failed'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Alert variant={step === 'update_complete' ? 'default' : 'destructive'}>
+              <AlertTitle>{step === 'update_complete' ? 'Success' : 'Error'}</AlertTitle>
+              <AlertDescription>{step === 'update_complete' ? 'Firmware installed successfully. Camera may reboot.' : 'See logs or try again.'}</AlertDescription>
+            </Alert>
+          </CardContent>
+          <CardFooter>{footer()}</CardFooter>
+        </>
+      )}
     </Card>
   );
 }
-
