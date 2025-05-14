@@ -419,7 +419,7 @@ export default function CamUpdatePageContent() {
                 value={entry.ip}
                 onChange={(e) => handleIpChange(entry.id, e.target.value)}
                 placeholder="e.g., 192.168.1.100"
-                className="flex-grow"
+                className="flex-grow bg-card"
                 disabled={appStep === 'batch_updating'}
               />
               <div className="w-6 h-6 flex items-center justify-center" title={entry.message || entry.status}>
@@ -493,5 +493,3 @@ export default function CamUpdatePageContent() {
     </Card>
   );
 }
-
-    
