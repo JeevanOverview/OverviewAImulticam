@@ -63,9 +63,7 @@ type AppStep =
 
 // -----------------------------------------------------------------------------
 export default function CamUpdatePageContent() {
-  const [cameraEntries, setCameraEntries] = useState<CameraEntry[]>([
-    { id: crypto.randomUUID(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }
-  ]);
+  const [cameraEntries, setCameraEntries] = useState<CameraEntry[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [appStep, setAppStep] = useState<AppStep>('configure_ips');
   const { toast } = useToast();
@@ -73,14 +71,26 @@ export default function CamUpdatePageContent() {
 
 
   useEffect(() => {
-    // Generate a unique ID for new entries if crypto.randomUUID is not available in older environments.
-    if (typeof crypto === 'undefined' || !crypto.randomUUID) {
+    // Ensure crypto.randomUUID is available or polyfilled
+    if (typeof window.crypto === 'undefined' || !window.crypto.randomUUID) {
         (window as any).crypto = window.crypto || {};
         (window as any).crypto.randomUUID = () =>
-            (''+[1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
-                (parseInt(c,10) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> parseInt(c,10) / 4).toString(16)
+            (''+[1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, (c: string) => // Added type for c
+                (parseInt(c,10) ^ window.crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> parseInt(c,10) / 4).toString(16)
             );
     }
+
+    // Initialize the first camera entry on the client-side
+    // This ensures crypto.randomUUID() is called only on the client after hydration
+    // and avoids hydration mismatch for the initial entry's ID.
+    if (cameraEntries.length === 0) {
+        setCameraEntries([
+            { id: window.crypto.randomUUID(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }
+        ]);
+    }
+  // cameraEntries is intentionally omitted from dependencies to ensure this runs only once
+  // to set up the initial state if it's empty, not on every cameraEntries change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -98,13 +108,13 @@ export default function CamUpdatePageContent() {
   const addCameraField = () => {
     setCameraEntries(prevEntries => [
       ...prevEntries,
-      { id: crypto.randomUUID(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }
+      { id: window.crypto.randomUUID(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }
     ]);
   };
 
   const removeCameraField = (id: string) => {
     setCameraEntries(prevEntries => prevEntries.filter(entry => entry.id !== id));
-     if (appStep === 'ips_checked' && cameraEntries.length === 1) { // if last one removed after check
+     if (appStep === 'ips_checked' && cameraEntries.length === 1 && prevEntries.find(e => e.id === id)) { // if last one removed after check
         setAppStep('configure_ips');
     }
   };
@@ -317,7 +327,13 @@ export default function CamUpdatePageContent() {
 
   const resetBatch = (clearIps: boolean = false) => {
     if (clearIps) {
-      setCameraEntries([{ id: crypto.randomUUID(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }]);
+       // Re-initialize with one empty field on the client side
+        if (typeof window.crypto !== 'undefined' && window.crypto.randomUUID) {
+             setCameraEntries([{ id: window.crypto.randomUUID(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }]);
+        } else {
+            // Fallback if crypto is somehow not ready, though the initial useEffect should handle it
+            setCameraEntries([{ id: 'fallback-id-' + Date.now(), ip: '', status: 'idle', progress: 0, message: 'Enter IP Address' }]);
+        }
     } else {
       setCameraEntries(prevEntries => prevEntries.map(entry => ({
         ...entry,
