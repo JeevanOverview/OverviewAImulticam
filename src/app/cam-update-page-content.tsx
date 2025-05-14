@@ -59,28 +59,40 @@ export default function CamUpdatePageContent() {
     setCurrentStep('connecting_to_camera');
     toast({ title: 'Connecting...', description: `Attempting to connect to ${ipAddress}` });
 
+    const targetUrl = STATUS_ENDPOINT(ipAddress);
+
     try {
-      // IMPORTANT: Replace STATUS_ENDPOINT with your camera's actual status check endpoint
-      const response = await fetch(STATUS_ENDPOINT(ipAddress), {
+      const response = await fetch(targetUrl, {
         method: 'GET',
         // Add any necessary headers, e.g., for authentication if required by the camera
         // headers: { 'Authorization': 'Bearer YOUR_TOKEN_HERE' },
       });
 
       if (response.ok) {
-        // const data = await response.json(); // Optionally parse response data
-        // console.log("Camera status:", data);
         setCurrentStep('ready_to_prepare');
         toast({ title: 'Connected!', description: `Successfully connected to camera at ${ipAddress}.` });
       } else {
-        setStatusMessage(`Failed to connect. Status: ${response.status}. Ensure camera is reachable and API is correct.`);
+        setStatusMessage(`Failed to connect. Camera responded with Status: ${response.status}. Ensure camera is reachable and API endpoint is correct.`);
         toast({ title: 'Connection Failed', description: `Could not connect to camera at ${ipAddress}. Status: ${response.status}`, variant: 'destructive' });
         setCurrentStep('ip_input');
       }
     } catch (error) {
-      console.error("Connection error:", error);
-      setStatusMessage('Connection error. Check network, camera IP, or CORS settings on the camera.');
-      toast({ title: 'Connection Error', description: 'Could not reach the camera. Check network, IP, or CORS.', variant: 'destructive' });
+      console.error(`Connection attempt failed to URL: ${targetUrl}`);
+      let userFriendlyMessage = 'Failed to connect to the camera. This could be due to the camera being offline, an incorrect IP address, network issues, or CORS restrictions on the camera. Please check your browser\'s developer console for more specific error messages (especially regarding CORS).';
+      
+      if (error instanceof Error) {
+        console.error(`Error name: ${error.name}`);
+        console.error(`Error message: ${error.message}`);
+        if (error.stack) {
+            console.error(`Stack trace: ${error.stack}`);
+        }
+      } else {
+        console.error('Caught a non-Error object during connection attempt:', error);
+      }
+      console.error("Full error object:", error);
+
+      setStatusMessage(userFriendlyMessage);
+      toast({ title: 'Connection Error', description: userFriendlyMessage, variant: 'destructive' });
       setCurrentStep('ip_input');
     } finally {
       setIsLoading(false);
@@ -91,14 +103,11 @@ export default function CamUpdatePageContent() {
     setIsLoading(true);
     setCurrentStep('preparing_update');
     toast({ title: 'Preparing Update...', description: 'Sending command to camera to prepare for update...' });
+    const targetUrl = PREPARE_UPDATE_ENDPOINT(ipAddress);
 
     try {
-      // IMPORTANT: Replace PREPARE_UPDATE_ENDPOINT with your camera's actual preparation endpoint
-      // This might be a POST or PUT request. Some cameras might not need this step.
-      const response = await fetch(PREPARE_UPDATE_ENDPOINT(ipAddress), {
-        method: 'POST', // Or 'PUT', check camera API
-        // body: JSON.stringify({ command: "prepare_firmware_update" }), // Example body, adjust as needed
-        // headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(targetUrl, {
+        method: 'POST', 
       });
 
       if (response.ok) {
@@ -111,9 +120,15 @@ export default function CamUpdatePageContent() {
         setCurrentStep('ready_to_prepare');
       }
     } catch (error) {
-      console.error("Prepare update error:", error);
-      setStatusMessage('Error preparing camera for update. Check connection, API, or CORS settings.');
-      toast({ title: 'Preparation Error', description: 'An error occurred while preparing the camera.', variant: 'destructive' });
+      console.error(`Prepare update error for URL: ${targetUrl}`);
+      let userFriendlyMessage = 'Error preparing camera for update. Check connection, API endpoint, or CORS settings. See browser console for details.';
+      if (error instanceof Error) {
+        console.error(`Error name: ${error.name}`);
+        console.error(`Error message: ${error.message}`);
+      }
+      console.error("Full error object:", error);
+      setStatusMessage(userFriendlyMessage);
+      toast({ title: 'Preparation Error', description: userFriendlyMessage, variant: 'destructive' });
       setCurrentStep('ready_to_prepare');
     } finally {
       setIsLoading(false);
@@ -141,25 +156,18 @@ export default function CamUpdatePageContent() {
     toast({ title: 'Uploading Firmware...', description: `Sending ${selectedFile.name} to ${ipAddress}.` });
 
     const formData = new FormData();
-    formData.append('firmware', selectedFile); // 'firmware' is a common field name, adjust if needed by camera API
+    formData.append('firmware', selectedFile); 
+    const targetUrl = UPLOAD_FIRMWARE_ENDPOINT(ipAddress);
 
     try {
-      // IMPORTANT: Replace UPLOAD_FIRMWARE_ENDPOINT with your camera's actual firmware upload endpoint
-      const response = await fetch(UPLOAD_FIRMWARE_ENDPOINT(ipAddress), {
+      setUploadProgress(10); // Indicate start of process
+      const response = await fetch(targetUrl, {
         method: 'POST',
         body: formData,
-        // 'Content-Type': 'multipart/form-data' is usually set automatically by fetch with FormData.
-        // Some cameras might require specific headers, add them here if needed.
       });
-
-      // Simulate progress as fetch API doesn't easily provide it for uploads
-      // For real progress, XMLHttpRequest or a library would be needed.
-      // Here, we'll just indicate it's active.
-      setUploadProgress(50); // Mid-way progress during upload
+      setUploadProgress(50); 
 
       if (response.ok) {
-        // const result = await response.json(); // Or response.text() if not JSON
-        // console.log("Upload response:", result);
         setUploadProgress(100);
         setCurrentStep('update_complete');
         setStatusMessage(`Firmware ${selectedFile.name} uploaded successfully to ${ipAddress}! Camera may restart.`);
@@ -172,10 +180,16 @@ export default function CamUpdatePageContent() {
         setUploadProgress(0);
       }
     } catch (error) {
-      console.error("Upload error:", error);
+      console.error(`Upload error for URL: ${targetUrl}`);
+      let userFriendlyMessage = 'Failed to upload firmware due to a network, camera error, or CORS issue. See browser console for details.';
+       if (error instanceof Error) {
+        console.error(`Error name: ${error.name}`);
+        console.error(`Error message: ${error.message}`);
+      }
+      console.error("Full error object:", error);
       setCurrentStep('update_failed');
-      setStatusMessage('Failed to upload firmware due to a network, camera error, or CORS issue.');
-      toast({ title: 'Upload Error', description: 'An error occurred during the firmware upload.', variant: 'destructive' });
+      setStatusMessage(userFriendlyMessage);
+      toast({ title: 'Upload Error', description: userFriendlyMessage, variant: 'destructive' });
       setUploadProgress(0);
     } finally {
       setIsLoading(false);
@@ -289,7 +303,7 @@ export default function CamUpdatePageContent() {
               {isLoading && <Loader2 className="h-12 w-12 animate-spin text-accent mx-auto mb-4" />}
               <Progress value={uploadProgress} className="w-full" />
               <p className="text-sm text-muted-foreground">
-                {uploadProgress === 100 ? "Finalizing..." : (uploadProgress > 0 ? "Transferring file..." : "Preparing to upload...")}
+                {uploadProgress === 100 ? "Finalizing..." : (uploadProgress >= 10 ? "Transferring file..." : "Preparing to upload...")}
               </p>
               <p className="text-xs text-muted-foreground">Do not turn off or disconnect the camera.</p>
             </CardContent>
@@ -331,3 +345,4 @@ export default function CamUpdatePageContent() {
     </Card>
   );
 }
+
