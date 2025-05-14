@@ -2,13 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: Arial, Helvetica, sans-serif;
-}
-
 @layer base {
   :root {
-    --background: 262 52% 57%; /* Purple #7E4ED3 */
+    --gradient-start: 262 58% 65%; /* Lighter purple */
+    --gradient-end: 262 48% 50%;   /* Darker purple */
+    --background: 262 52% 57%; /* Purple #7E4ED3 - For other solid elements if needed */
     --foreground: 210 20% 95%; /* Light Gray */
     --card: 0 0% 100%; /* White */
     --card-foreground: 210 29% 24%; /* Dark Blue #2c3e50 */
@@ -43,7 +41,9 @@ body {
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
   .dark {
-    --background: 210 29% 10%; /* Dark mode: Darker Blue */
+    --gradient-start: 210 29% 15%; /* Dark mode gradient start */
+    --gradient-end: 210 29% 5%;   /* Dark mode gradient end */
+    --background: 210 29% 10%; /* Dark mode: Darker Blue - For other solid elements */
     --foreground: 204 17% 85%; /* Dark mode: Lighter Gray */
     --card: 210 29% 14%; /* Dark mode: Dark Blue Card */
     --card-foreground: 204 17% 85%; /* Dark mode: Lighter Gray */
@@ -83,6 +83,7 @@ body {
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    background-image: linear-gradient(to bottom right, hsl(var(--gradient-start)), hsl(var(--gradient-end)));
   }
 }
